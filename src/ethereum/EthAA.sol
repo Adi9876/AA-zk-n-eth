@@ -43,7 +43,6 @@ contract EthAA is IAccount, Ownable {
         returns (uint256 validationData)
     {
         validationData = _validateSignature(userOp, userOpHash);
-
         //paying back to entry point nodes
         _payPrefund(missingAccountFunds);
     }
