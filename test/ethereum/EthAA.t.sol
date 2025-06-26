@@ -6,18 +6,27 @@ import {EthAA} from "../../src/ethereum/EthAA.sol";
 import {DeployEthAA} from "../../script/DeployEthAA.s.sol";
 import {HelperConfig} from "../../script/HelperConfig.s.sol";
 import {ERC20Mock} from "@openzeppelin/contracts/mocks/token/ERC20Mock.sol";
+import {SendPackedUserOp, PackedUserOperation} from "../../script/SendPackedUserOp.s.sol";
+import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
+import {IEntryPoint} from "lib/account-abstraction/contracts/interfaces/IEntryPoint.sol";
+import {MessageHashUtils} from "@openzeppelin/contracts/utils/cryptography/MessageHashUtils.sol";
 
 contract EthAATest is Test {
+    using MessageHashUtils for bytes32;
+
     HelperConfig helperConfig;
     EthAA ethAA;
     ERC20Mock usdc;
+    SendPackedUserOp sendPackedUserOp;
 
     uint256 constant AMOUNT = 1e18;
+    address randomUser = makeAddr("randomUser");
 
     function setUp() public {
         DeployEthAA deployEthAA = new DeployEthAA();
         (helperConfig, ethAA) = deployEthAA.deployEthAA();
         usdc = new ERC20Mock();
+        sendPackedUserOp = new SendPackedUserOp();
     }
 
     // test
@@ -33,6 +42,63 @@ contract EthAATest is Test {
 
         assertEq(usdc.balanceOf(address(ethAA)), AMOUNT);
     }
+
+    function test_nonOwnerCannotExecuteCommands() public {
+        // need a mock erc20 contract and inputs
+        assertEq(usdc.balanceOf(address(ethAA)), 0);
+        address destination = address(usdc);
+        uint256 value = 0;
+        bytes memory data = abi.encodeWithSelector(ERC20Mock.mint.selector, address(ethAA), AMOUNT);
+
+        vm.prank(randomUser);
+        vm.expectRevert(EthAA.EthAA__NotFromEntryPointOrOwner.selector);
+        ethAA.execute(destination, value, data);
+    }
+
+    function testRecoverSignedOp() public {
+        // Arrange
+        assertEq(usdc.balanceOf(address(ethAA)), 0);
+        address dest = address(usdc);
+        uint256 value = 0;
+        bytes memory functionData = abi.encodeWithSelector(ERC20Mock.mint.selector, address(ethAA), AMOUNT);
+        bytes memory executeCallData = abi.encodeWithSelector(ethAA.execute.selector, dest, value, functionData);
+        PackedUserOperation memory packedUserOp =
+            sendPackedUserOp.generateSignedUserOperation(executeCallData, helperConfig.getConfig());
+        bytes32 userOperationHash = IEntryPoint(helperConfig.getConfig().entryPoint).getUserOpHash(packedUserOp);
+
+        // Act
+        address actualSigner = ECDSA.recover(userOperationHash.toEthSignedMessageHash(), packedUserOp.signature);
+
+        // Assert
+        assertEq(actualSigner, ethAA.owner());
+    }
+
+    
+    // function test_signingUserOp() public {
+    //     // arange
+    //     assertEq(usdc.balanceOf(address(ethAA)), 0);
+    //     address destination = address(usdc);
+    //     uint256 value = 0;
+    //     bytes memory functionData = abi.encodeWithSelector(ERC20Mock.mint.selector, address(ethAA), AMOUNT);
+
+    //     // since now we need to pass alt mempool + entrypoint contract + the contract so we need to wrap up all dest+value+funcitondata into the calldata
+    //     bytes memory executeCallData = abi.encodeWithSelector(EthAA.execute.selector, destination, value, functionData);
+    //     // hey entrpoint contract please call our contract and then our contract will call the usdc
+    //     PackedUserOperation memory packedUserOp =
+    //         sendPackedUserOp.generateSignedUserOperation(executeCallData, helperConfig.getConfig());
+
+    //     bytes32 userOperationHash = IEntryPoint(helperConfig.getConfig().entryPoint).getUserOpHash(packedUserOp);
+    //     //act
+    //     address actualsigner = ECDSA.recover(userOperationHash.toEthSignedMessageHash(), packedUserOp.signature);
+
+    //     //assert
+    //     assertEq(actualsigner, ethAA.owner());
+    // }
+
+    // function test_validateUser() public {
+    //     // we need packedUsersginedop for that we'll create a script which can get all of it and sign as well
+
+    // }
 
     // we want to test user can go through the
     // sign -> alt-mempool -> entrypoint -> interact with our contract
