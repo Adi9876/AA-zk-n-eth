@@ -54,46 +54,27 @@ contract EthAATest is Test {
         vm.expectRevert(EthAA.EthAA__NotFromEntryPointOrOwner.selector);
         ethAA.execute(destination, value, data);
     }
-
-    function testRecoverSignedOp() public {
-        // Arrange
+    
+    function test_signingUserOp() public {
+        // arange
         assertEq(usdc.balanceOf(address(ethAA)), 0);
-        address dest = address(usdc);
+        address destination = address(usdc);
         uint256 value = 0;
         bytes memory functionData = abi.encodeWithSelector(ERC20Mock.mint.selector, address(ethAA), AMOUNT);
-        bytes memory executeCallData = abi.encodeWithSelector(ethAA.execute.selector, dest, value, functionData);
+
+        // since now we need to pass alt mempool + entrypoint contract + the contract so we need to wrap up all dest+value+funcitondata into the calldata
+        bytes memory executeCallData = abi.encodeWithSelector(EthAA.execute.selector, destination, value, functionData);
+        // hey entrpoint contract please call our contract and then our contract will call the usdc
         PackedUserOperation memory packedUserOp =
             sendPackedUserOp.generateSignedUserOperation(executeCallData, helperConfig.getConfig());
+
         bytes32 userOperationHash = IEntryPoint(helperConfig.getConfig().entryPoint).getUserOpHash(packedUserOp);
+        //act
+        address actualsigner = ECDSA.recover(userOperationHash.toEthSignedMessageHash(), packedUserOp.signature);
 
-        // Act
-        address actualSigner = ECDSA.recover(userOperationHash.toEthSignedMessageHash(), packedUserOp.signature);
-
-        // Assert
-        assertEq(actualSigner, ethAA.owner());
+        //assert
+        assertEq(actualsigner, ethAA.owner());
     }
-
-    
-    // function test_signingUserOp() public {
-    //     // arange
-    //     assertEq(usdc.balanceOf(address(ethAA)), 0);
-    //     address destination = address(usdc);
-    //     uint256 value = 0;
-    //     bytes memory functionData = abi.encodeWithSelector(ERC20Mock.mint.selector, address(ethAA), AMOUNT);
-
-    //     // since now we need to pass alt mempool + entrypoint contract + the contract so we need to wrap up all dest+value+funcitondata into the calldata
-    //     bytes memory executeCallData = abi.encodeWithSelector(EthAA.execute.selector, destination, value, functionData);
-    //     // hey entrpoint contract please call our contract and then our contract will call the usdc
-    //     PackedUserOperation memory packedUserOp =
-    //         sendPackedUserOp.generateSignedUserOperation(executeCallData, helperConfig.getConfig());
-
-    //     bytes32 userOperationHash = IEntryPoint(helperConfig.getConfig().entryPoint).getUserOpHash(packedUserOp);
-    //     //act
-    //     address actualsigner = ECDSA.recover(userOperationHash.toEthSignedMessageHash(), packedUserOp.signature);
-
-    //     //assert
-    //     assertEq(actualsigner, ethAA.owner());
-    // }
 
     // function test_validateUser() public {
     //     // we need packedUsersginedop for that we'll create a script which can get all of it and sign as well
