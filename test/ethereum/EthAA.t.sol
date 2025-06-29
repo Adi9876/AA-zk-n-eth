@@ -54,7 +54,7 @@ contract EthAATest is Test {
         vm.expectRevert(EthAA.EthAA__NotFromEntryPointOrOwner.selector);
         ethAA.execute(destination, value, data);
     }
-    
+
     function test_signingUserOp() public {
         // arange
         assertEq(usdc.balanceOf(address(ethAA)), 0);
@@ -66,7 +66,8 @@ contract EthAATest is Test {
         bytes memory executeCallData = abi.encodeWithSelector(EthAA.execute.selector, destination, value, functionData);
         // hey entrpoint contract please call our contract and then our contract will call the usdc
         PackedUserOperation memory packedUserOp =
-            sendPackedUserOp.generateSignedUserOperation(executeCallData, helperConfig.getConfig());
+            sendPackedUserOp.generateSignedUserOperation(executeCallData, helperConfig.getConfig(),address(ethAA));
+
 
         bytes32 userOperationHash = IEntryPoint(helperConfig.getConfig().entryPoint).getUserOpHash(packedUserOp);
         //act
@@ -76,10 +77,69 @@ contract EthAATest is Test {
         assertEq(actualsigner, ethAA.owner());
     }
 
-    // function test_validateUser() public {
-    //     // we need packedUsersginedop for that we'll create a script which can get all of it and sign as well
+    /**
+     * Sign user ops
+     * call validate userops
+     * assert the return is correct
+     */
+    function test_validateUserOps() public {
+        // we need packedUsersginedop for that we'll create a script which can get all of it and sign as well
 
-    // }
+        // copied part
+        // arange
+        assertEq(usdc.balanceOf(address(ethAA)), 0);
+        address destination = address(usdc);
+        uint256 value = 0;
+        bytes memory functionData = abi.encodeWithSelector(ERC20Mock.mint.selector, address(ethAA), AMOUNT);
+
+        // since now we need to pass alt mempool + entrypoint contract + the contract so we need to wrap up all dest+value+funcitondata into the calldata
+        bytes memory executeCallData = abi.encodeWithSelector(EthAA.execute.selector, destination, value, functionData);
+        // hey entrpoint contract please call our contract and then our contract will call the usdc
+        PackedUserOperation memory packedUserOp =
+            sendPackedUserOp.generateSignedUserOperation(executeCallData, helperConfig.getConfig(),address(ethAA));
+
+
+        bytes32 userOperationHash = IEntryPoint(helperConfig.getConfig().entryPoint).getUserOpHash(packedUserOp);
+
+        uint256 missingAccountFUnds = 1e18;
+        vm.prank(helperConfig.getConfig().entryPoint);
+        uint256 validationData = ethAA.validateUserOp(packedUserOp, userOperationHash, missingAccountFUnds);
+        assertEq(validationData, 0);
+    }
+
+    function test_entryPointCanExecuteCommands() public {
+
+        //copied again
+
+         // copied part
+        // arange
+        assertEq(usdc.balanceOf(address(ethAA)), 0);
+        address destination = address(usdc);
+        uint256 value = 0;
+        bytes memory functionData = abi.encodeWithSelector(ERC20Mock.mint.selector, address(ethAA), AMOUNT);
+
+        // since now we need to pass alt mempool + entrypoint contract + the contract so we need to wrap up all dest+value+funcitondata into the calldata
+        bytes memory executeCallData = abi.encodeWithSelector(EthAA.execute.selector, destination, value, functionData);
+        // hey entrpoint contract please call our contract and then our contract will call the usdc
+        PackedUserOperation memory packedUserOp =
+            sendPackedUserOp.generateSignedUserOperation(executeCallData, helperConfig.getConfig(),address(ethAA));
+
+
+
+        // since we do not have a paymaster setup we need to fund our contract for the alt-mempool to handle the gas stuff from it
+        vm.deal(address(ethAA),1e18);
+
+        // act
+        PackedUserOperation[] memory ops = new PackedUserOperation[](1);
+        ops[0] = packedUserOp;
+        // here we see that anybody can send to the entrypoint (here: any alt-mempool node) as long as its signed by us
+        vm.prank(randomUser);
+        // consider this random user as a node in alt-mempool getting the gas
+        IEntryPoint(helperConfig.getConfig().entryPoint).handleOps(ops,payable(randomUser));
+
+        //assert
+        assertEq(usdc.balanceOf(address(ethAA)),AMOUNT);
+    }
 
     // we want to test user can go through the
     // sign -> alt-mempool -> entrypoint -> interact with our contract

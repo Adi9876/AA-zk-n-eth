@@ -72,7 +72,7 @@ contract EthAA is IAccount, Ownable {
         if (missingAccountFunds > 0) {
             // msg.sender should be entrypoint contract can be hardcoded ->
             (bool success,) = payable(msg.sender).call{value: missingAccountFunds, gas: type(uint256).max}("");
-            require(success, "Unknown error while transfering amount");
+            (success);
         }
     }
 
