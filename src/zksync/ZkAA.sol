@@ -24,11 +24,13 @@ import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 import {Utils} from "lib/foundry-era-contracts/src/system-contracts/contracts/libraries/Utils.sol";
 
-
 contract ZkAA is IAccount, Ownable {
     error ZkAA__NotEnoughtBalance();
     error ZkAA__NotFromBootLoader();
     error ZkAA__ExecutionFailed();
+    error ZkAA__InvalidSignature();
+    error ZkAA__NotFromBootLoaderOrOwner();
+    error ZkAA__FailedToPay();
 
     using MemoryTransactionHelper for Transaction;
 
@@ -41,6 +43,15 @@ contract ZkAA is IAccount, Ownable {
         _;
     }
 
+    modifier requireFromBootLoaderOrOwner() {
+        if (msg.sender != BOOTLOADER_FORMAL_ADDRESS && msg.sender != owner()) {
+            revert ZkAA__NotFromBootLoaderOrOwner();
+        }
+        _;
+    }
+
+    receive() external payable{}
+
     /**
      * This must increase nonce
      * also validate the transaction (check owner signed the txn)
@@ -51,6 +62,60 @@ contract ZkAA is IAccount, Ownable {
         requireFromBootLoader
         returns (bytes4 magic)
     {
+        return _validateTransaction(_transaction);
+    }
+
+    function executeTransaction(bytes32 _txHash, bytes32 _suggestedSignedHash, Transaction memory _transaction)
+        external
+        payable
+        requireFromBootLoaderOrOwner
+    {
+        _executeTransaction(_transaction);
+    }
+
+    function executeTransactionFromOutside(Transaction memory _transaction) external payable {
+        bytes4 magic = _validateTransaction(_transaction);
+        if (magic != ACCOUNT_VALIDATION_SUCCESS_MAGIC) {
+            revert ZkAA__InvalidSignature();
+        }
+        _executeTransaction(_transaction);
+    }
+
+    function payForTransaction(bytes32 _txHash, bytes32 _suggestedSignedHash, Transaction memory _transaction)
+        external
+        payable
+    {
+        bool success = _transaction.payToTheBootloader();
+        if (!success) {
+            revert ZkAA__FailedToPay();
+        }
+    }
+
+    function prepareForPaymaster(bytes32 _txHash, bytes32 _possibleSignedHash, Transaction memory _transaction)
+        external
+        payable
+    {}
+
+    function _executeTransaction(Transaction memory _transaction) internal {
+        address to = address(uint160(_transaction.to));
+        uint128 value = Utils.safeCastToU128(_transaction.value);
+        bytes memory data = _transaction.data;
+
+        if (to == address(DEPLOYER_SYSTEM_CONTRACT)) {
+            uint32 gas = Utils.safeCastToU32(gasleft());
+            SystemContractsCaller.systemCallWithPropagatedRevert(gas, to, value, data);
+        } else {
+            bool success;
+            assembly {
+                success := call(gas(), to, value, add(data, 0x20), mload(data), 0, 0)
+            }
+            if (!success) {
+                revert ZkAA__ExecutionFailed();
+            }
+        }
+    }
+
+    function _validateTransaction(Transaction memory _transaction) internal returns (bytes4 magic){
         // nonce update stuff ->
         //system contract call (call nonceholder and call increment)
         // is-system = true if it's true very specific calls are turned into system contract "call" (as simulation)
@@ -82,42 +147,6 @@ contract ZkAA is IAccount, Ownable {
         // return magic number ->
         return magic;
     }
-
-    function executeTransaction(bytes32 _txHash, bytes32 _suggestedSignedHash, Transaction memory _transaction)
-        external
-        payable
-    {
-        address to = address(uint160(_transaction.to));
-        uint128 value = Utils.safeCastToU128(_transaction.value);
-        bytes memory data = _transaction.data;
-
-        if (to == address(DEPLOYER_SYSTEM_CONTRACT)) {
-            uint32 gas = Utils.safeCastToU32(gasleft());
-            SystemContractsCaller.systemCallWithPropagatedRevert(gas, to, value, data);
-        } else {
-            bool success;
-            assembly {
-                success := call(gas(), to, value, add(data, 0x20), mload(data), 0, 0)
-            }
-            if (!success) {
-                revert ZkAA__ExecutionFailed();
-            }
-        }
-    }
-
-    // There is no point in providing possible signed hash in the `executeTransactionFromOutside` method,
-    // since it typically should not be trusted.
-    function executeTransactionFromOutside(Transaction memory _transaction) external payable {}
-
-    function payForTransaction(bytes32 _txHash, bytes32 _suggestedSignedHash, Transaction memory _transaction)
-        external
-        payable
-    {}
-
-    function prepareForPaymaster(bytes32 _txHash, bytes32 _possibleSignedHash, Transaction memory _transaction)
-        external
-        payable
-    {}
 }
 
 /**
